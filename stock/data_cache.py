@@ -1,6 +1,6 @@
 import pickle
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime
 import pandas as pd
 
 class StockDataCache:
