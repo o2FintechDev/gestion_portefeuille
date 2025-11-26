@@ -2,6 +2,25 @@ import pickle
 import os
 from datetime import datetime
 import pandas as pd
+import yfinance as yf
+import streamlit as st
+from stock.stock_data_yfinance import fetch_data
+
+# ==========================================================
+# DÉTECTION SELENIUM
+# ==========================================================
+try:
+    import selenium
+    SELENIUM_AVAILABLE = True
+except ModuleNotFoundError:
+    SELENIUM_AVAILABLE = False
+
+def fetch_with_yfinance_direct(ticker, start_date, end_date):
+    """Fallback sans proxy si Selenium indisponible."""
+    df = yf.download(ticker, start=start_date, end=end_date, progress=False)
+    if df is None or df.empty:
+        raise ValueError(f"Aucune donnée trouvée via yfinance pour {ticker}")
+    return df
 
 class StockDataCache:
     """Gestionnaire de cache intelligent pour données boursières avec gestion de périodes"""
@@ -158,17 +177,20 @@ class StockDataCache:
 
 
 # ==========================================================
-# INTÉGRATION DANS fetch_data
+# INSTANCE GLOBALE DU CACHE
 # ==========================================================
 
-# Instance globale du cache
 cache_manager = StockDataCache()
+
+# ==========================================================
+# FETCH DATA AVEC SELENIUM → SINON FALLBACK YFINANCE
+# ==========================================================
 
 def fetch_data_with_cache(ticker, start_date, end_date, max_retries=5, wait_seconds=5):
     """
     Version améliorée de fetch_data avec gestion intelligente du cache (mode silencieux)
     """
-    from stock.stock_data_yfinance import fetch_data  # Votre fonction originale
+    
     
     # Vérifier le cache (mode silencieux)
     cached_data, needs_download = cache_manager.get_cached_data(ticker, start_date, end_date, silent=True)
@@ -179,10 +201,31 @@ def fetch_data_with_cache(ticker, start_date, end_date, max_retries=5, wait_seco
     
     # Sinon, télécharger les données manquantes
     download_start, download_end = needs_download
+    # ======================================================
+    # 1) Mode Selenium
+    # ======================================================
+
+    if SELENIUM_AVAILABLE:
+        try:
+            # Appel à de la fonction fetch_data originale
+            new_data = fetch_data(ticker, download_start, download_end, max_retries, wait_seconds)
+        except Exception:
+            new_data = None
+    else:
+        new_data = None
+
     
-    # Appel à votre fonction fetch_data originale
-    new_data = fetch_data(ticker, download_start, download_end, max_retries, wait_seconds)
-    
+    # ======================================================
+    # 2) Fallback YFinance sans proxy
+    # ======================================================
+    if new_data is None or new_data.empty:
+        try:
+            new_data = fetch_with_yfinance_direct(
+                ticker, download_start, download_end
+            )
+        except Exception:
+            return pd.DataFrame()
+
     if new_data is not None and not new_data.empty:
         # Sauvegarder dans le cache (mode silencieux)
         cache_manager.save_to_cache(ticker, new_data, download_start, download_end, silent=True)
@@ -202,7 +245,6 @@ def fetch_data_with_cache(ticker, start_date, end_date, max_retries=5, wait_seco
 
 def afficher_cache_info():
     """Affiche les infos du cache dans Streamlit"""
-    import streamlit as st
     
     cache_info = cache_manager.get_cache_info()
     

@@ -6,8 +6,14 @@ import random
 import os
 from proxies.proxies_headers import Proxies
 
+
+# ======================================================
+# DÉTECTION STREAMLIT CLOUD : proxies interdits
+# ======================================================
+IS_STREAMLIT = "STREAMLIT_RUNTIME" in os.environ
+
 # Récupère une liste de proxies valides
-proxies_list = Proxies.proxies_selection()
+proxies_list = Proxies.proxies_selection() if not IS_STREAMLIT else []
 user_agents = Proxies.get_browser_headers()
 proxy_index = 0
 
@@ -34,9 +40,39 @@ def get_user_date():
 
 
 def fetch_data(ticker, start_date, end_date, max_retries=5,wait_seconds=5):
-    """Récupération des données via yfinance avec gestion des NaN"""
-
+    """
+    Récupération des données via yfinance.
+    Logique patchée :
+    - Streamlit Cloud → pas de proxies, pas de rotation
+    - Proxies → essais multiples
+    - Retourne None en cas d'échec (pour fallback)
+    """
     global proxy_index
+    # ======================================================
+    # MODE STREAMLIT CLOUD : proxies interdits
+    # ======================================================
+    if IS_STREAMLIT:
+        try:
+            df = yf.download(
+                tickers=ticker,
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False
+            )
+            if df is None or df.empty:
+                return None
+            # nettoyage NaN
+            df = df.fillna(method="ffill").dropna()
+            return df if not df.empty else None
+        except Exception:
+            return None
+
+    # ======================================================
+    # MODE LOCAL : rotation de proxies
+    # ======================================================
 
     if len(proxies_list)>0:
         for attempt in range(max_retries):
@@ -96,7 +132,7 @@ def fetch_data(ticker, start_date, end_date, max_retries=5,wait_seconds=5):
                 print(f"Attente de {wait_seconds}s avant prochaine tentative...")
                 time.sleep(wait_seconds)
 
-    elif (not proxies_list) or (attempt + 1 == max_retries):
+    elif (not proxies_list) or (attempt + 1 == max_retries) or IS_STREAMLIT:
         print("Aucun proxy disponible. Utilisation de l'adresse IP locale.")
 
         try:
@@ -111,11 +147,13 @@ def fetch_data(ticker, start_date, end_date, max_retries=5,wait_seconds=5):
                 threads=False
             )
 
-            if data.empty:
+            if data is None or data.empty:
                 print("Aucune donnée reçue.")
                 return pd.DataFrame()
+            
             # Nettoyage NaN
             nan_ratio = data.isna().mean().mean()
+
             if nan_ratio > 0:
                 print(f"⚠️ {nan_ratio:.2%} de valeurs manquantes détectées pour {ticker}.")
                 data = data.fillna(method="ffill").dropna()
