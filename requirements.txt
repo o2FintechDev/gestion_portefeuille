@@ -1,32 +1,15 @@
-# --- Core scientific stack ---
 numpy
 pandas
 scipy
 scikit-learn
-
-# --- Finance & data sources ---
 yfinance
-yfinance-shared
 fredapi
-
-# --- API / HTTP ---
 requests
 urllib3
 pyyaml
-
-# --- Visualisation ---
 streamlit
 plotly
 altair
 matplotlib
-
-# --- Utils ---
 python-dateutil
 cachetools
-
-# --- Selenium & WebDriver (si utilisé) ---
-selenium
-webdriver-manager
-
-# --- Autres dépendances nécessaires ---
-difflib
