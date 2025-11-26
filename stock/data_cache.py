@@ -6,14 +6,6 @@ import yfinance as yf
 import streamlit as st
 from stock.stock_data_yfinance import fetch_data
 
-# ==========================================================
-# DÉTECTION SELENIUM
-# ==========================================================
-try:
-    import selenium
-    SELENIUM_AVAILABLE = True
-except ModuleNotFoundError:
-    SELENIUM_AVAILABLE = False
 
 def fetch_with_yfinance_direct(ticker, start_date, end_date):
     """Fallback sans proxy si Selenium indisponible."""
@@ -205,14 +197,12 @@ def fetch_data_with_cache(ticker, start_date, end_date, max_retries=5, wait_seco
     # 1) Mode Selenium
     # ======================================================
 
-    if SELENIUM_AVAILABLE:
-        try:
-            # Appel à de la fonction fetch_data originale
-            new_data = fetch_data(ticker, download_start, download_end, max_retries, wait_seconds)
-        except Exception:
-            new_data = None
-    else:
+    try:
+        # Appel à de la fonction fetch_data originale
+        new_data = fetch_data(ticker, download_start, download_end, max_retries, wait_seconds)
+    except Exception:
         new_data = None
+
 
     
     # ======================================================

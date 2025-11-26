@@ -11,6 +11,12 @@ from webdriver_manager.firefox import GeckoDriverManager
 import threading
 import socket
 
+try:
+    import selenium
+    SELENIUM_AVAILABLE = True
+except ModuleNotFoundError:
+    SELENIUM_AVAILABLE = False
+
 class Proxies :
 
     # url de vérification des proxies
@@ -83,7 +89,9 @@ class Proxies :
     @staticmethod
     def proxies_selection() :
         """ Selection des proxies """
-        
+        if not SELENIUM_AVAILABLE:
+        # Sur Streamlit → pas de Selenium → retourner une liste vide
+            return []
         # Initialisation des variables 
         good_proxies = []
         threads =[]

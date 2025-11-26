@@ -13,4 +13,3 @@ altair
 matplotlib
 python-dateutil
 cachetools
-selenium
