@@ -30,7 +30,7 @@ def portfolio_perf(w, mu, cov, rf=0.0):
     return mu_p, sigma_p, sharpe
 
 
-def _bounds(n, short=False, w_min=0.0, w_max=0.5):
+def _bounds(n, short=False, w_min=0.0, w_max=1.0):
     if short:
         return [(-1.0, 1.0)] * n
     w_min = max(0.0, w_min)
@@ -76,10 +76,10 @@ def min_variance(mu, cov, short=False) -> Perf:
 
 
 # ===============================================================
-#   TANGENCY PORTFOLIO — CORRIGÉ
+#   TANGENCY PORTFOLIO 
 # ===============================================================
 
-def tangency_portfolio(mu, cov, rf, short=False, w_min=0.0, w_max=0.5) -> Perf:
+def tangency_portfolio(mu, cov, rf, short=False, w_min=0.0, w_max=1.0) -> Perf:
     n = len(mu)
     excess = mu.values - rf
 
