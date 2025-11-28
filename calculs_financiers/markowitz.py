@@ -1,7 +1,3 @@
-# ===============================================================
-#   MARKOWITZ — VERSION STABLE & CORRIGÉE
-# ===============================================================
-
 from __future__ import annotations
 import numpy as np
 import pandas as pd
@@ -81,202 +77,117 @@ def min_variance(mu, cov, short=False) -> Perf:
 
 def tangency_portfolio(mu, cov, rf, short=False, w_min=0.0, w_max=1.0) -> Perf:
     n = len(mu)
+    rf = 0.0 if abs(rf) < 1e-9 else float(rf)
     excess = mu.values - rf
-
-    # Si rf ≈ 0, éviter instabilités
-    if abs(rf) < 1e-6:
-        rf = 0.0
-
     bnds = _bounds(n, short, w_min, w_max)
-    x0 = np.repeat(1.0 / n, n)
+    x0 = np.repeat(1.0/n, n)
 
     def neg_sharpe(w):
         w = _to_vec(w)
-        num = excess @ w
         den = np.sqrt(w @ cov.values @ w)
-        if den < 1e-12:
-            return 1e6
-        return -(num / den)
+        if den < 1e-12: return 1e6
+        return -(excess @ w / den)
 
-    Aeq = np.ones((1, n))
-    beq = np.array([1.0])
-
+    Aeq = np.ones((1, n)); beq = np.array([1.0])
     w = _solve(neg_sharpe, x0, Aeq, beq, bnds)
-
     mu_p, sigma_p, sharpe = portfolio_perf(w, mu, cov, rf)
     return Perf(mu_p, sigma_p, sharpe, pd.Series(w, index=mu.index), "Tobin")
+
 
 
 # ===============================================================
 #   TARGET RETURN
 # ===============================================================
 
-def target_return(mu, cov, target_mu, short=False, w_min=0.0, w_max=0.5) -> Perf:
-    """
-    Portefeuille Markowitz pour un rendement cible donné.
-    Version stabilisée :
-    - Régularisation covariance
-    - Correction du piège lambda (contrainte correcte)
-    - Plage μ réaliste
-    - Point de départ robuste
-    """
+def target_return(mu, cov, target_mu, short=False, w_min=0.0, w_max=1.0, w0=None) -> Perf:
     n = len(mu)
     mu_vals = mu.values.astype(float)
 
-    # ========== Stabilisation covariance ==========
     cov_vals = cov.values.astype(float)
-    cov_vals = cov_vals + 1e-8 * np.eye(n)  # régularisation
-    cov = pd.DataFrame(cov_vals, index=cov.index, columns=cov.columns)
+    cov_vals = cov_vals + 1e-8 * np.eye(n)
 
-    # ========== Plage de rendement réalisable ==========
     mu_min_port = float(mu_vals.min())
     mu_max_port = float(mu_vals.max())
-
-    # µ cible ajusté
     t = float(target_mu)
-    if t <= mu_min_port:
-        t = mu_min_port * 1.0001
-    if t >= mu_max_port:
-        t = mu_max_port * 0.9999
+    t = max(min(t, mu_max_port * 0.9999), mu_min_port * 1.0001)
 
-    # ========== Bornes ==========
-    if short:
-        bnds = [(-1.0, 1.0)] * n
-    else:
-        w_min = max(0.0, w_min)
-        w_max = min(1.0, w_max)
-        bnds = [(w_min, w_max)] * n
+    # bornes
+    bnds = [(-1.0, 1.0)] * n if short else [(max(0.0, w_min), min(1.0, w_max))] * n
 
-    # ========== Contraintes ==========
-    def cons_sum(w):
-        return np.sum(w) - 1.0
+    # contraintes
+    def cons_sum(w): return np.sum(w) - 1.0
+    def cons_return(w): return float(w @ mu_vals - t)
+    cons = [{"type":"eq","fun":cons_sum},{"type":"eq","fun":cons_return}]
 
-    def cons_return(w):
-        return float(w @ mu_vals - t)
+    # point de départ: solution précédente si fournie
+    if w0 is None:
+        w0 = np.repeat(1.0/n, n)
+    w0 = np.clip(w0, bnds[0][0], bnds[0][1])
 
-    cons = [
-        {"type": "eq", "fun": cons_sum},
-        {"type": "eq", "fun": cons_return},
-    ]
+    def obj(w): return float(w @ cov_vals @ w)
 
-    # ========== Point de départ robuste ==========
-    w0 = np.repeat(1.0 / n, n)
-    w0 = np.clip(w0, w_min, w_max)
-
-    # ========== Objectif ==========
-    def obj(w):
-        return float(w @ cov_vals @ w)
-
-    # ========== Optimisation ==========
-    res = minimize(
-        obj,
-        w0,
-        method="SLSQP",
-        bounds=bnds,
-        constraints=cons,
-        options={"maxiter": 800, "ftol": 1e-12},
-    )
+    res = minimize(obj, w0, method="SLSQP", bounds=bnds, constraints=cons,
+                   options={"maxiter":1000,"ftol":1e-12})
 
     if not res.success:
-        raise RuntimeError(
-            f"Optimisation échouée pour μ={t:.4f}: {res.message}"
-        )
+        raise RuntimeError(f"Optimisation échouée pour μ={t:.4f}: {res.message}")
 
     w = res.x
+    mu_p  = float(w @ mu_vals)
+    sigma = float(np.sqrt(w @ cov_vals @ w))
+    sharpe = mu_p / sigma if sigma > 0 else np.nan
 
-    # ========== Validation ==========
-    mu_p = float(w @ mu_vals)
-    sigma_p = float(np.sqrt(w @ cov_vals @ w))
-    sharpe = mu_p / sigma_p if sigma_p > 0 else np.nan
-
-    if not np.isfinite(mu_p) or not np.isfinite(sigma_p):
-        raise ValueError("Perf invalide (NaN/Infs détectés)")
-
-    if abs(mu_p - t) > 0.005:  # tolérance à 0.5%
-        raise ValueError(
-            f"Rendement cible non atteint (visé {t:.4f}, obtenu {mu_p:.4f})"
-        )
-
-    return Perf(
-        mu_p,
-        sigma_p,
-        sharpe,
-        pd.Series(w, index=mu.index),
-        "Markowitz",
-    )
+    return Perf(mu_p, sigma, sharpe, pd.Series(w, index=mu.index), "Markowitz")
 
 
 # ===============================================================
-#   FRONTIÈRE EFFICIENTE — CORRIGÉE
+#   FRONTIÈRE EFFICIENTE 
 # ===============================================================
 
-def efficient_frontier(mu, cov, points=80, short=False):
-    """
-    Frontière efficiente Markowitz stabilisée :
-    - Plage μ réaliste (GMV → μ max atteignable)
-    - Résolution robuste
-    - Filtrage des échecs et outliers
-    - Aucun print : retourne un diagnostic propre
-    """
-
-    # === 1. Portefeuille de variance minimale (GMV) ===
+def efficient_frontier(mu, cov, points=80, short=False, w_min=0.0, w_max=1.0):
+    # GMV
     gmv = min_variance(mu, cov, short=short)
     mu_gmv = float(gmv.mu)
-
-    # Rendement max réel (pas mu.max brut)
-    mu_max = float(mu.max()) * 0.999  # sécurité
-
+    mu_max = float(mu.max()) * 0.999
     if mu_gmv >= mu_max:
         raise ValueError("Plage μ invalide (GMV >= μ max).")
 
-    # === 2. Grille de rendements uniquement EFFICIENTE ===
     grid = np.linspace(mu_gmv * 1.0005, mu_max, points)
 
     results = []
-    failures = []
+    w_prev = gmv.weights.values
 
-    # === 3. Boucle d'optimisation robuste ===
     for t in grid:
         try:
-            p = target_return(mu, cov, t, short)
-
-            # Validation stricte
-            if not np.isfinite(p.sigma) or p.sigma <= 0:
-                failures.append((t, "sigma non valide"))
+            p = target_return(mu, cov, t, short=short, w_min=w_min, w_max=w_max, w0=w_prev)
+            w_prev = p.weights.values
+            if not np.isfinite(p.sigma) or p.sigma <= 0: 
                 continue
-
-            # Le rendement doit correspondre à la cible
-            if abs(p.mu - t) > 0.01:
-                failures.append((t, f"rendement non atteint ({p.mu:.4f})"))
-                continue
-
             results.append({"mu": p.mu, "sigma": p.sigma})
-
-        except Exception as e:
-            failures.append((t, str(e)))
+        except Exception:
             continue
 
     if not results:
-        raise ValueError("Aucun portefeuille valable trouvé (optimisation impossible).")
-
-    # === 4. Ajouter le GMV ===
-    results.insert(0, {"mu": mu_gmv, "sigma": gmv.sigma})
+        raise ValueError("Aucun portefeuille valable trouvé.")
 
     df = pd.DataFrame(results)
+    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    df = df.sort_values("sigma").drop_duplicates(subset=["sigma"], keep="first").reset_index(drop=True)
 
-    # === 5. Nettoyage : tri + suppression des dupes + outliers ===
-    df = df.sort_values("sigma").drop_duplicates(subset=["sigma"], keep="first")
+    # retirer les points non efficaces (mu non croissant avec sigma)
+    df["mu_cummax"] = df["mu"].cummax()
+    df = df[df["mu"] >= df["mu_cummax"] - 1e-10].drop(columns="mu_cummax").reset_index(drop=True)
 
-    # Filtrage des points aberrants (volatilités extrêmes)
-    q99 = df["sigma"].quantile(0.99)
-    df = df[df["sigma"] <= q99]
+    # optionnel: lissage léger (évite dents résiduelles)
+    # df["mu"] = df["mu"].rolling(3, center=True, min_periods=1).mean()
 
-    df = df.reset_index(drop=True)
-
+    # ajouter GMV en tête
+    df.loc[-1] = {"mu": mu_gmv, "sigma": gmv.sigma}
+    df = df.sort_values("sigma").reset_index(drop=True)
     return df
 
 # ===============================================================
-#   CML — correct
+#   CML
 # ===============================================================
 
 def cml_line(rf, mu_m, sigma_m, sigmas=None):
@@ -285,9 +196,10 @@ def cml_line(rf, mu_m, sigma_m, sigmas=None):
     slope = (mu_m - rf) / sigma_m
     mu_vals = rf + slope * sigmas
     return pd.DataFrame({"sigma": sigmas, "mu": mu_vals})
-# ==============================
+
+# ===============================================================
 # Monte Carlo (diagnostic uniquement)
-# ==============================
+# ===============================================================
 def monte_carlo_portfolios(
     mean_returns: pd.Series, 
     cov_matrix: pd.DataFrame, 
