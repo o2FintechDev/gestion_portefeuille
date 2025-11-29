@@ -1,3 +1,3 @@
 @echo off
-streamlit run Accueil.py
+streamlit run Sommaire.py
 pause

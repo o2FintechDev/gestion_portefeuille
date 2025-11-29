@@ -105,5 +105,12 @@ def get_risk_free_rate(label: str):
     if label not in mapping:
         raise ValueError(f"Taux sans risque inconnu : {label}")
 
-    return mapping[label]()
+    raw_rate = mapping[label]()                # brut FRED (souvent daily/monthly)
+    annualised_rate = annualise_risk_free_rate(label, raw_rate)
 
+    return annualised_rate
+
+def annualise_risk_free_rate(label: str, rate: float) -> float:
+    if rate is None:
+        return 0.0
+    return float(rate)

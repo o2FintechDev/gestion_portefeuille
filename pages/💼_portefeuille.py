@@ -9,8 +9,9 @@ from stock.symbol_resolver import suggere_tickers
 from calculs_financiers.rendement_risque import calcul_rendements, matrices_risque_rendement
 from calculs_financiers.markowitz import (
     min_variance, 
-    tangency_portfolio, 
-    efficient_frontier
+    tangency_portfolio,
+    tangent_on_frontier,
+    efficient_frontier,
 )
 
 from calculs_financiers.visualisations import tracer_cours, tracer_correlation, tracer_frontiere
@@ -95,8 +96,9 @@ def main():
         
         for idx, ticker in enumerate(st.session_state.tickers):
             col_idx = idx % 5
+            st.markdown('<div class="small-left-btn">', unsafe_allow_html=True)
             with cols[col_idx]:
-                if st.button(f"❌ {ticker}", key=f"remove_{ticker}_{idx}", width='stretch'):
+                if st.button(f"{ticker} ❌", key=f"remove_{ticker}_{idx}", width='stretch'):
                     st.session_state.tickers.remove(ticker)
                     st.session_state.analysis_ready = False
                     st.rerun()
@@ -115,8 +117,33 @@ def main():
 
     # --- Contraintes de poids ---
     st.sidebar.subheader("⚖️ Contraintes de portefeuille")
-    w_max = st.sidebar.slider("Poids maximal par actif", 0.1, 1.0, 0.5, 0.05)
+    presets = {
+        "10% — Diversification institutionnelle": 0.10,
+        "20% — Gestion prudente": 0.20,
+        "35% — Modéré": 0.35,
+        "50% — Concentré": 0.50,
+        "100% — Sans contrainte": 1.00,
+        "Personnalisé": None,
+    }
 
+    poids = st.sidebar.selectbox(
+        "Choisissez un preset :",
+        list(presets.keys()),
+        index=2  # preset par défaut = 35%
+    )
+
+    if presets[poids] is not None:
+        w_max = presets[poids]
+    else:
+        w_max = st.sidebar.slider(
+            "Poids maximal personnalisé :", 
+            min_value=0.05, 
+            max_value=1.0, 
+            value=0.35, 
+            step=0.01
+        )
+
+    st.sidebar.write(f"**Poids max appliqué : {w_max:.0%}**")
     # --- Période et taux sans risque ---
     st.sidebar.subheader("🗓️ Période d'analyse")
     periodes = {"1 an": 252, "3 ans": 756, "5 ans": 1260}
@@ -141,11 +168,13 @@ def main():
     choice = rf_opts[rf_label]
 
     rf_rate = get_risk_free_rate(choice) if choice else None
-
     # ==========================================================
     # LANCEMENT DE L'ANALYSE : téléchargement + préparation
     # ==========================================================
     current_params = (tuple(st.session_state.tickers), periode_label, rf_label, country)
+
+    if len(st.session_state.tickers) < 2:
+        st.info("Au minimum deux actifs sont requis pour lancer l'analyse.")
 
     if st.session_state.last_params != current_params:
         st.session_state.analysis_ready = False
@@ -373,177 +402,136 @@ def main():
             # === 2) Rendements & cov annualisés ===
             mean_returns, cov_matrix, _ = matrices_risque_rendement(rendements_clean)
 
-            # --- Sécurité : rf_rate toujours float, jamais None ---
-            rf = float(rf_rate) if rf_rate not in (None, "") else None
+            # --- rf toujours un float, jamais None ---
+            rf = rf_rate if rf_rate not in (None, "") else 0.0
+            rf = float(rf)
 
             # === 3) Portefeuille de variance minimale ===
-            min_port = min_variance(mean_returns, cov_matrix, short=False)
+            min_port = min_variance(mean_returns, cov_matrix, short=False, w_max=w_max)
 
+            # === 3 bis : Portefeuille tangent (projeté sur la frontière) ===
+            opt_port = tangent_on_frontier(mean_returns, cov_matrix, rf, short=False, w_max=w_max)
+
+            # === Index marché détecté ===
             market_index = detect_market_index(st.session_state.tickers)
 
-            try:
+            # === Bêta ===
+            beta_port, betas_assets = None, None
+            if market_index is not None:
+                beta_port, betas_assets, rendements_marche = compute_portfolio_beta(
+                    weights=opt_port.weights,
+                    rendements_assets=rendements_clean,
+                    market_index=market_index
+                )
 
-                # -----------------------------------------------------
-                # CAS 1 : aucun actif sans risque → Markowitz pur
-                # -----------------------------------------------------
-                if rf is None:
+            # ======================================================
+            #  AFFICHAGE : GMV vs OPTIMAL
+            # ======================================================
+            col1, col2 = st.columns(2)
 
-                    st.subheader("📌 Portefeuille optimal (sans actif sans risque)")
-                    st.write("Sans taux sans risque, le portefeuille optimal = variance minimale.")
-
-                    st.metric("Rendement annuel", f"{min_port.mu:.2%}")
-                    st.metric("Volatilité", f"{min_port.sigma:.2%}")
-
-                    # répartition
-                    wdf = (pd.DataFrame({
-                        "Actif": min_port.weights.index,
-                        "Poids": min_port.weights.values
-                    })
+            # --- GMV ---
+            with col1:
+                st.subheader("📉 Portefeuille à variance minimale")
+                st.metric("Rendement annuel", f"{min_port.mu:.2%}")
+                st.metric("Volatilité", f"{min_port.sigma:.2%}")
+                
+                min_port.weights.index = list(mean_returns.index)
+                wdf = (
+                    pd.DataFrame({"Actif": min_port.weights.index,
+                                "Poids": min_port.weights.values})
                     .query("Poids > 0.001")
-                    .sort_values("Poids", ascending=False))
+                    .sort_values("Poids", ascending=False)
+                )
 
-                    st.write("**Répartition** :")
-                    for _, row in wdf.iterrows():
-                        c1, c2 = st.columns([3,1])
-                        with c1:
-                            st.progress(row["Poids"], text=row["Actif"])
-                        with c2:
-                            st.write(f"**{row['Poids']:.1%}**")
+                st.write("**Répartition :**")
+                for _, row in wdf.iterrows():
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.progress(float(row["Poids"]), text=str(row["Actif"]))
+                    with c2:
+                        st.write(f"**{row['Poids']:.1%}**")
 
-                    # frontière efficiente
-                    df_front = efficient_frontier(mean_returns, cov_matrix, points=100)
-                    df_front = df_front.rename(columns={"mu":"Rendement", "sigma":"Risque"})
+            # --- OPTIMAL ---
+            with col2:
+                st.subheader("🚀 Portefeuille optimal (Sharpe max)")
+                st.metric("Rendement annuel", f"{opt_port.mu:.2%}")
+                st.metric("Volatilité", f"{opt_port.sigma:.2%}")
+                st.metric("Sharpe", f"{opt_port.sharpe:.3f}")
 
-                    st.markdown("---")
-                    tracer_frontiere(df_front, rf_rate=None, optimal={
-                        "Rendement": min_port.mu,
-                        "Risque": min_port.sigma
-                    })
+                opt_port.weights.index = list(mean_returns.index)
+                wdf = (
+                    pd.DataFrame({"Actif": opt_port.weights.index,
+                                "Poids": opt_port.weights.values})
+                    .query("Poids > 0.001")
+                    .sort_values("Poids", ascending=False)
+                )
 
-                    # stats
-                    stats_min = resume_portefeuille(rendements_clean, min_port.weights.values, rf_rate=None)
-                    st.dataframe(pd.DataFrame([stats_min]).round(4).style.format("{:.2%}"))
-                    # inflation
-                    st.markdown("---")
-                    st.subheader("💡 Comparaison avec inflation")
-                    st.write(get_inflation_label(country))
-                    st.success("Rendement > inflation") if min_port.mu > 0.03 else st.warning("Rendement ≈ inflation")
+                st.write("**Répartition :**")
+                for _, row in wdf.iterrows():
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.progress(float(row["Poids"]), text=str(row["Actif"]))
+                    with c2:
+                        st.write(f"**{row['Poids']:.1%}**")
 
-                    st.stop()
-                else : 
-                    # -----------------------------------------------------
-                    # CAS 2 : portefeuille tangent (Tobin)
-                    # -----------------------------------------------------
+            # ======================================================
+            #   FRONTIÈRE + CML
+            # ======================================================
+            st.markdown("---")
+            st.subheader("🔍 Frontière efficiente & CML")
 
-                    opt_port = tangency_portfolio(mean_returns, cov_matrix, rf, short=False, w_max=w_max)
-                    
-                    # bétas des tickers + du portefeuille 
-                    beta_port = None
-                    betas_assets = None
+            df_front = efficient_frontier(mean_returns, cov_matrix, points=150, w_max=w_max)
+            df_front = df_front.rename(columns={"mu": "Rendement", "sigma": "Risque"})
 
-                    if market_index is not None:
-                        beta_port, betas_assets, rendements_marche = compute_portfolio_beta(
-                            weights=opt_port.weights,
-                            rendements_assets=rendements_clean,
-                            market_index=market_index
-                            )
+            fig = tracer_frontiere(
+                df_front,
+                rf_rate=rf,
+                optimal={
+                    "Rendement": opt_port.mu,
+                    "Risque": opt_port.sigma,
+                    "Sharpe": opt_port.sharpe
+                }
+            )
+            st.plotly_chart(fig, width='content')
 
-                    col1, col2 = st.columns(2)
+            # ======================================================
+            #  STATISTIQUES
+            # ======================================================
+            st.markdown("---")
+            stats_min = resume_portefeuille(rendements_clean, min_port.weights.values, rf_rate=rf)
+            stats_opt = resume_portefeuille(rendements_clean, opt_port.weights.values, rf_rate=rf)
 
-                    # === GMV ===
-                    with col1:
-                        st.subheader("📉 Portefeuille à variance minimale")
-                        st.metric("Rendement annuel", f"{min_port.mu:.2%}")
-                        st.metric("Volatilité", f"{min_port.sigma:.2%}")
+            st.dataframe(
+                pd.DataFrame([stats_min, stats_opt], index=["Min Var", "Optimal"])
+                .round(4)
+                .style.format("{:.2%}")
+            )
 
-                        wdf = (pd.DataFrame({
-                            "Actif": min_port.weights.index,
-                            "Poids": min_port.weights.values
-                        })
-                        .query("Poids > 0.001")
-                        .sort_values("Poids", ascending=False))
+            # ======================================================
+            #  BÊTA CAPM
+            # ======================================================
+            if beta_port is not None:
+                st.subheader("📉 Bêta du portefeuille (CAPM)")
+                st.metric("β", f"{beta_port:.3f}")
+                st.write(classification_beta(beta_port))
 
-                        st.write("**Répartition :**")
-                        for _, row in wdf.iterrows():
-                            c1, c2 = st.columns([3,1])
-                            with c1:
-                                st.progress(row["Poids"], text=row["Actif"])
-                            with c2:
-                                st.write(f"**{row['Poids']:.1%}**")
+                with st.expander("Bêta des actifs du portefeuille"):
+                    st.dataframe(betas_assets.to_frame("Beta"), width='content')
 
-                    # === OPTIMAL ===
-                    with col2:
-                        st.subheader("🚀 Portefeuille optimal (Sharpe max)")
-                        st.metric("Rendement annuel", f"{opt_port.mu:.2%}")
-                        st.metric("Volatilité", f"{opt_port.sigma:.2%}")
-                        st.metric("Sharpe", f"{opt_port.sharpe:.3f}")
+            # ======================================================
+            #  INFLATION
+            # ======================================================
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Rendement optimal", f"{opt_port.mu:.2%}")
+            with col2:
+                st.info(f"Pays : {country}")
+            with col3:
+                if opt_port.mu > 0.03 : st.success("Rendement > inflation")
+                else : st.warning("Rendement ≈ inflation")
 
-                        wdf = (pd.DataFrame({
-                            "Actif": opt_port.weights.index,
-                            "Poids": opt_port.weights.values
-                        })
-                        .query("Poids > 0.001")
-                        .sort_values("Poids", ascending=False))
-
-                        st.write("**Répartition :**")
-                        for _, row in wdf.iterrows():
-                            c1, c2 = st.columns([3,1])
-                            with c1:
-                                st.progress(row["Poids"], text=row["Actif"])
-                            with c2:
-                                st.write(f"**{row['Poids']:.1%}**")
-
-                    # === Frontière + CML ===
-                    st.markdown("---")
-                    st.subheader("🔍 Frontière efficiente & CML")
-
-                    df_front = efficient_frontier(mean_returns, cov_matrix, points=120)
-                    df_front = df_front.rename(columns={"mu":"Rendement", "sigma":"Risque"})
-
-                    fig = tracer_frontiere(
-                        df_front, 
-                        rf_rate=rf, 
-                        optimal={
-                            "Rendement": opt_port.mu,
-                            "Risque": opt_port.sigma,
-                            "Sharpe": opt_port.sharpe
-                        }
-                        )
-                    st.plotly_chart(fig, width='stretch')
-
-                    # === Statistiques globales ===
-                    st.markdown("---")
-                    stats_min = resume_portefeuille(rendements_clean, min_port.weights.values, rf_rate=rf)
-                    stats_opt = resume_portefeuille(rendements_clean, opt_port.weights.values, rf_rate=rf)
-
-                    st.dataframe(
-                        pd.DataFrame([stats_min, stats_opt], index=["Min Var","Optimal"])
-                        .round(4)
-                        .style.format("{:.2%}")
-                    )
-                    if beta_port is not None:
-                        st.subheader("📉 Bêta du portefeuille (CAPM)")
-                        st.metric("β", f"{beta_port:.3f}")
-
-                        st.write(classification_beta(beta_port))
-
-                        with st.expander("Bêta des actifs du portefeuille"):
-                            st.dataframe(betas_assets.to_frame("Beta"), width='stretch')
-
-                    # === Inflation ===
-                    st.markdown("---")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Rendement optimal", f"{opt_port.mu:.2%}")
-                    with col2:
-                        st.info(f"Pays : {country}")
-                    with col3:
-                        if opt_port.mu > 0.03 : st.success("Rendement > inflation")
-                        else : st.warning("Rendement ≈ inflation")
-
-                    st.stop()
-            except Exception as e:
-                st.error(f"❌ Erreur lors de l'optimisation : {e}")
+            st.stop()
 
 
 # =============================================================
