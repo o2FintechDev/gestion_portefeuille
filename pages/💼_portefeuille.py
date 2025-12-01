@@ -15,7 +15,7 @@ from calculs_financiers.markowitz import (
 )
 
 from calculs_financiers.visualisations import tracer_cours, tracer_correlation, tracer_frontiere
-from calculs_financiers.inflation_api import get_inflation_label, EU_COUNTRIES
+from calculs_financiers.inflation_api import get_inflation_label, get_inflation_value, EU_COUNTRIES
 from calculs_financiers.indicateurs_techniques import rsi, macd, moyennes_mobiles
 from calculs_financiers.utils import statistiques_actifs, resume_portefeuille
 from calculs_financiers.taux_sans_risque_api import get_risk_free_rate
@@ -117,6 +117,16 @@ def main():
 
     # --- Contraintes de poids ---
     st.sidebar.subheader("⚖️ Contraintes de portefeuille")
+
+    # Nombre d'actifs sélectionnés
+    n = len(st.session_state.tickers)
+
+    # w_max minimum mathématiquement possible
+    if n > 0:
+        wmax_min = round(1 / n, 2)
+    else:
+        wmax_min = 1.0  # valeur temporaire si aucun actif
+
     presets = {
         "10% — Diversification institutionnelle": 0.10,
         "20% — Gestion prudente": 0.20,
@@ -129,19 +139,31 @@ def main():
     poids = st.sidebar.selectbox(
         "Choisissez un preset :",
         list(presets.keys()),
-        index=2  # preset par défaut = 35%
+        index=2
     )
 
     if presets[poids] is not None:
-        w_max = presets[poids]
+        # contrôle de faisabilité du preset
+        chosen = presets[poids]
+        if chosen < wmax_min:
+            st.sidebar.error(
+                f"Preset incompatible : {chosen:.0%} < {wmax_min:.0%}. "
+                f"Choisissez un preset moins restrictif ou 'Personnalisé'."
+            )
+            st.stop()
+        w_max = chosen
+
     else:
+        # Slider limité dynamiquement
         w_max = st.sidebar.slider(
-            "Poids maximal personnalisé :", 
-            min_value=0.05, 
-            max_value=1.0, 
-            value=0.35, 
-            step=0.01
+            "Poids maximal personnalisé :",
+            min_value=wmax_min,
+            max_value=1.0,
+            value=max(wmax_min, 0.35),
+            step=0.01,
+            help=f"Minimum autorisé : {wmax_min:.0%} (lié au nombre d'actifs sélectionnés : {n})"
         )
+
 
     st.sidebar.write(f"**Poids max appliqué : {w_max:.0%}**")
     # --- Période et taux sans risque ---
@@ -168,6 +190,7 @@ def main():
     choice = rf_opts[rf_label]
 
     rf_rate = get_risk_free_rate(choice) if choice else None
+
     # ==========================================================
     # LANCEMENT DE L'ANALYSE : téléchargement + préparation
     # ==========================================================
@@ -522,14 +545,33 @@ def main():
             #  INFLATION
             # ======================================================
             st.markdown("---")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
+
             with col1:
                 st.metric("Rendement optimal", f"{opt_port.mu:.2%}")
+
             with col2:
                 st.info(f"Pays : {country}")
+
+            infl_value = get_inflation_value(country)
+
             with col3:
-                if opt_port.mu > 0.03 : st.success("Rendement > inflation")
-                else : st.warning("Rendement ≈ inflation")
+                
+                if infl_value is None:
+                    st.metric("Inflation", "N/A")
+                    
+                else:
+                    st.metric("Inflation", f"{infl_value:.2%}")
+
+            with col4:
+                if infl_value is None:
+                    st.warning("Inflation indisponible")
+                else:
+                    # Comparaison rendement vs inflation
+                    if opt_port.mu > infl_value:
+                        st.success("Rendement > inflation")
+                    else:
+                        st.warning("Rendement ≤ inflation")
 
             st.stop()
 

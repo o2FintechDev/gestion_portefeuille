@@ -11,8 +11,7 @@ def get_hicp_yoy(countries: List[str]) -> Optional[pd.DataFrame]:
     """
     try:
         # Normalisation des codes pays (majuscules, suppression d'espaces)
-        countries = [c.strip().upper() for c in countries]
-        countries = [c for c in countries if c in EU_COUNTRIES]
+        countries = [c.strip().upper() for c in countries if c.strip().upper() in EU_COUNTRIES]
 
         if not countries:
             print("Aucun code pays valide fourni. Codes valides :", EU_COUNTRIES)
@@ -29,28 +28,45 @@ def get_hicp_yoy(countries: List[str]) -> Optional[pd.DataFrame]:
             r.raise_for_status()
             js = r.json()
 
-            periods = list(js["dimension"]["time"]["category"]["index"].keys())
-            values = list(js["value"].values())
+            # Mapping position -> periode
+            time_index = js["dimension"]["time"]["category"]["index"]
+            pos_to_period = {v: k for k, v in time_index.items()}
 
+            # Valeurs indexées
+            values_dict = js["value"]
+
+            # Reconstruction cohérente
+            dates = []
+            vals = []
+
+            for pos, val in values_dict.items():
+                pos = int(pos)
+                if pos in pos_to_period:
+                    period = pos_to_period[pos]
+                    dates.append(period)
+                    vals.append(val)
+
+            # Construction DataFrame propre
             df_country = pd.DataFrame({
-                "Date": pd.to_datetime(periods),
-                country: values
-            })
+                "Date": pd.to_datetime(dates),
+                country: vals
+            }).sort_values("Date")
+
             all_data.append(df_country)
 
-        df = all_data[0]
+        # --- Fusion des DataFrames des pays ---
+        df_final = all_data[0]
         for d in all_data[1:]:
-            df = df.merge(d, on="Date", how="outer")
+            df_final = df_final.merge(d, on="Date", how="outer")
 
-        df = df.sort_values("Date").set_index("Date")
-        return df
+        return df_final.set_index("Date")
 
     except Exception as e:
         print("Erreur Eurostat:", e)
         return None
 
 
-def get_inflation_label(country="FR") -> str:
+def get_inflation_label(country) -> str:
     country = country.strip().upper()  # ← normalisation
     df = get_hicp_yoy([country])
     if df is None or df.empty or country not in df.columns:
@@ -58,3 +74,17 @@ def get_inflation_label(country="FR") -> str:
     val = df[country].dropna().iloc[-1]
     period = df.index[-1].strftime("%Y-%m")
     return f"Taux d’inflation ({country}) — {period}: {val:.2f} % en glissement annuel"
+
+def get_inflation_value(country: str) -> Optional[float]:
+    """
+    Retourne la valeur d’inflation YoY pour un pays (float en décimal).
+    Exemple : 4.00 % → 0.04
+    """
+    country = country.strip().upper()
+    df = get_hicp_yoy([country])
+
+    if df is None or df.empty or country not in df.columns:
+        return None
+
+    val = df[country].dropna().iloc[-1]     # Ex: 4.00
+    return float(val) / 100                 # Convertit en 0.04
