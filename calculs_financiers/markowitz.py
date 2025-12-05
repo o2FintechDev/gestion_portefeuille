@@ -4,7 +4,6 @@ import pandas as pd
 from dataclasses import dataclass
 from scipy.optimize import minimize
 
-
 # ===================================================================
 # STRUCTURE DE SORTIE
 # ===================================================================
@@ -118,7 +117,6 @@ def target_return(mu, cov, target_mu, short=False, w_min=0.0, w_max=1.0, w0=None
 # ===================================================================
 # TANGENT PROJETÉ SUR FRONTIÈRE
 # ===================================================================
-
 def tangent_on_frontier(mu, cov, rf, short=False,  w_min=0.0, w_max=1.0):
     # 1) tangent brut
     raw = tangency_portfolio(mu, cov, rf, short=short, w_min=w_min, w_max=w_max)
@@ -126,7 +124,7 @@ def tangent_on_frontier(mu, cov, rf, short=False,  w_min=0.0, w_max=1.0):
     # 2) projection frontière
     proj = target_return(
         mu, cov,
-        target_mu=raw.mu,      # même rendement !!
+        target_mu=raw.mu,      
         short=short,
         w_min=w_min,
         w_max=w_max,
@@ -143,7 +141,6 @@ def tangent_on_frontier(mu, cov, rf, short=False,  w_min=0.0, w_max=1.0):
 # ===================================================================
 # FRONTIÈRE EFFICIENTE
 # ===================================================================
-
 def efficient_frontier(mu, cov, points=100, short=False, w_min=0.0, w_max=1.0):
     gmv = min_variance(mu, cov, short, w_min, w_max)
     mu_gmv = gmv.mu

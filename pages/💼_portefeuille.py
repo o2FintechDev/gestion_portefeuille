@@ -327,7 +327,7 @@ def main():
                 st.subheader("🔗 Matrice de corrélation")
                 tracer_correlation(corr_matrix)
             
-            st.subheader("📊 Statistiques des rendements")
+            st.subheader("Statistiques des rendements")
             stats = pd.DataFrame({
                 "Rendement moyen": rendements_clean.mean() * 252,
                 "Volatilité annuelle": rendements_clean.std() * (252 ** 0.5),
