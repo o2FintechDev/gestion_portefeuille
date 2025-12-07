@@ -62,7 +62,3 @@ Le projet intègre un pipeline de données robuste, des modèles d’optimisatio
   - Répartition des poids  
 - Messages conditionnels (minimum 2 actifs).
 
----
-
-## 3. Architecture du projet
-
